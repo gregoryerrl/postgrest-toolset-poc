@@ -1,0 +1,247 @@
+# MCP Toolbox for Databases - Tools Configuration
+# Defines custom SQL tools that the agent can use
+
+sources:
+  postgres-source:
+    kind: postgres
+    host: ${POSTGRES_HOST}
+    port: ${POSTGRES_PORT}
+    database: ${POSTGRES_DATABASE}
+    user: ${POSTGRES_USER}
+    password: ${POSTGRES_PASSWORD}
+
+tools:
+  # Schema exploration tools
+  list-tables:
+    kind: postgres-sql
+    source: postgres-source
+    description: List all tables in the database with their row counts
+    statement: |
+      SELECT
+        schemaname,
+        tablename,
+        n_tup_ins as approximate_rows
+      FROM pg_stat_user_tables
+      ORDER BY schemaname, tablename;
+
+  describe-table:
+    kind: postgres-sql
+    source: postgres-source
+    description: Get detailed information about a specific table including columns, types, and constraints
+    parameters:
+      - name: table_name
+        type: string
+        description: The name of the table to describe
+    statement: |
+      SELECT
+        column_name,
+        data_type,
+        is_nullable,
+        column_default
+      FROM information_schema.columns
+      WHERE table_name = $1
+      ORDER BY ordinal_position;
+
+  # Customer queries
+  get-customers:
+    kind: postgres-sql
+    source: postgres-source
+    description: Get all customers, optionally filtered by city or country
+    parameters:
+      - name: city
+        type: string
+        description: Filter by city (optional, use '%' for all)
+      - name: country
+        type: string
+        description: Filter by country (optional, use '%' for all)
+    statement: |
+      SELECT id, name, email, city, country, created_at
+      FROM customers
+      WHERE (city ILIKE $1 OR $1 = '%')
+        AND (country ILIKE $2 OR $2 = '%')
+      ORDER BY name
+      LIMIT 100;
+
+  get-customer-by-id:
+    kind: postgres-sql
+    source: postgres-source
+    description: Get a specific customer by their ID
+    parameters:
+      - name: customer_id
+        type: integer
+        description: The customer ID
+    statement: |
+      SELECT * FROM customers WHERE id = $1;
+
+  # Order queries
+  get-orders:
+    kind: postgres-sql
+    source: postgres-source
+    description: Get orders with optional status filter
+    parameters:
+      - name: status
+        type: string
+        description: Filter by status (pending, shipped, completed, or '%' for all)
+    statement: |
+      SELECT
+        o.id,
+        c.name as customer_name,
+        o.order_date,
+        o.status,
+        o.total_amount
+      FROM orders o
+      JOIN customers c ON o.customer_id = c.id
+      WHERE (o.status = $1 OR $1 = '%')
+      ORDER BY o.order_date DESC
+      LIMIT 100;
+
+  get-order-details:
+    kind: postgres-sql
+    source: postgres-source
+    description: Get detailed information about a specific order including line items
+    parameters:
+      - name: order_id
+        type: integer
+        description: The order ID
+    statement: |
+      SELECT
+        o.id as order_id,
+        c.name as customer_name,
+        c.email as customer_email,
+        o.order_date,
+        o.status,
+        p.name as product_name,
+        oi.quantity,
+        oi.unit_price,
+        (oi.quantity * oi.unit_price) as line_total,
+        o.total_amount as order_total
+      FROM orders o
+      JOIN customers c ON o.customer_id = c.id
+      JOIN order_items oi ON o.id = oi.order_id
+      JOIN products p ON oi.product_id = p.id
+      WHERE o.id = $1;
+
+  # Product queries
+  get-products:
+    kind: postgres-sql
+    source: postgres-source
+    description: Get products, optionally filtered by category
+    parameters:
+      - name: category
+        type: string
+        description: Filter by category (or '%' for all)
+    statement: |
+      SELECT id, name, category, price, stock_quantity
+      FROM products
+      WHERE (category ILIKE $1 OR $1 = '%')
+      ORDER BY category, name;
+
+  get-low-stock-products:
+    kind: postgres-sql
+    source: postgres-source
+    description: Get products with stock below a threshold
+    parameters:
+      - name: threshold
+        type: integer
+        description: Stock quantity threshold
+    statement: |
+      SELECT id, name, category, price, stock_quantity
+      FROM products
+      WHERE stock_quantity < $1
+      ORDER BY stock_quantity ASC;
+
+  # Analytics queries
+  get-revenue-by-status:
+    kind: postgres-sql
+    source: postgres-source
+    description: Get total revenue grouped by order status
+    statement: |
+      SELECT
+        status,
+        COUNT(*) as order_count,
+        SUM(total_amount) as total_revenue,
+        AVG(total_amount) as avg_order_value
+      FROM orders
+      GROUP BY status
+      ORDER BY total_revenue DESC;
+
+  get-top-customers:
+    kind: postgres-sql
+    source: postgres-source
+    description: Get top customers by total spend
+    parameters:
+      - name: limit_count
+        type: integer
+        description: Number of top customers to return
+    statement: |
+      SELECT
+        c.id,
+        c.name,
+        c.email,
+        COUNT(o.id) as order_count,
+        SUM(o.total_amount) as total_spent
+      FROM customers c
+      LEFT JOIN orders o ON c.id = o.customer_id
+      GROUP BY c.id, c.name, c.email
+      ORDER BY total_spent DESC NULLS LAST
+      LIMIT $1;
+
+  get-sales-by-category:
+    kind: postgres-sql
+    source: postgres-source
+    description: Get sales breakdown by product category
+    statement: |
+      SELECT
+        p.category,
+        COUNT(DISTINCT oi.order_id) as order_count,
+        SUM(oi.quantity) as units_sold,
+        SUM(oi.quantity * oi.unit_price) as total_revenue
+      FROM products p
+      JOIN order_items oi ON p.id = oi.product_id
+      GROUP BY p.category
+      ORDER BY total_revenue DESC;
+
+  # Custom query tool (use with caution)
+  run-query:
+    kind: postgres-sql
+    source: postgres-source
+    description: Run a custom read-only SQL query. Only SELECT statements are allowed.
+    parameters:
+      - name: sql_query
+        type: string
+        description: The SQL SELECT query to execute
+    statement: ${sql_query}
+
+toolsets:
+  all-tools:
+    - list-tables
+    - describe-table
+    - get-customers
+    - get-customer-by-id
+    - get-orders
+    - get-order-details
+    - get-products
+    - get-low-stock-products
+    - get-revenue-by-status
+    - get-top-customers
+    - get-sales-by-category
+    - run-query
+
+  schema-tools:
+    - list-tables
+    - describe-table
+
+  customer-tools:
+    - get-customers
+    - get-customer-by-id
+    - get-top-customers
+
+  order-tools:
+    - get-orders
+    - get-order-details
+    - get-revenue-by-status
+
+  product-tools:
+    - get-products
+    - get-low-stock-products
+    - get-sales-by-category

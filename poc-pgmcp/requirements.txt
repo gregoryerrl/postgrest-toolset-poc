@@ -1,0 +1,8 @@
+# For Python client/wrapper
+httpx>=0.25.0
+python-dotenv>=1.0.0
+pytest>=7.4.0
+
+# Optional: ADK wrapper
+google-adk>=1.1.0
+google-genai>=1.0.0
